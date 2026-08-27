@@ -1,0 +1,119 @@
+name: Android CI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Analyze, test, and build Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.2
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      # Repository secrets are intentionally not exposed to pull requests.
+      - name: Prepare release keystore
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          [[ -z "${ANDROID_KEYSTORE_BASE64:-}" ]] && missing+=(ANDROID_KEYSTORE_BASE64)
+          [[ -z "${ANDROID_KEYSTORE_PASSWORD:-}" ]] && missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [[ -z "${ANDROID_KEY_ALIAS:-}" ]] && missing+=(ANDROID_KEY_ALIAS)
+          [[ -z "${ANDROID_KEY_PASSWORD:-}" ]] && missing+=(ANDROID_KEY_PASSWORD)
+
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error::Missing required Actions secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload-keystore.jks"
+          keytool -list \
+            -keystore "$RUNNER_TEMP/upload-keystore.jks" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD \
+            -alias "$ANDROID_KEY_ALIAS" > /dev/null
+
+      - name: Build signed APK and AAB
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          flutter build apk --release --build-number="$GITHUB_RUN_NUMBER"
+          flutter build appbundle --release --build-number="$GITHUB_RUN_NUMBER"
+
+      - name: Create checksums
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          sha256sum \
+            build/app/outputs/flutter-apk/app-release.apk \
+            build/app/outputs/bundle/release/app-release.aab \
+            > build/android-checksums.sha256
+
+      - name: Upload Android artifacts
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: orbit-breaker-android-${{ github.run_number }}
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
+            build/android-checksums.sha256
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Remove release keystore
+        if: always() && github.event_name != 'pull_request'
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/upload-keystore.jks"
