@@ -80,7 +80,22 @@ jobs:
             -storepass:env ANDROID_KEYSTORE_PASSWORD \
             -alias "$ANDROID_KEY_ALIAS" > /dev/null
 
-      - name: Build signed APK and AAB
+      - name: Calculate release version
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Android CI run #4 is the first release in this scheme: 1.1.33.
+          version_patch=$((GITHUB_RUN_NUMBER + 29))
+          version_name="1.1.${version_patch}"
+          version_code="$version_patch"
+
+          echo "VERSION_NAME=$version_name" >> "$GITHUB_ENV"
+          echo "VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+          echo "Release version: $version_name ($version_code)"
+
+      - name: Build signed release APK
         if: github.event_name != 'pull_request'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/upload-keystore.jks
@@ -88,27 +103,21 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          flutter build apk --release --build-number="$GITHUB_RUN_NUMBER"
-          flutter build appbundle --release --build-number="$GITHUB_RUN_NUMBER"
+          set -euo pipefail
+          flutter build apk --release \
+            --build-name="$VERSION_NAME" \
+            --build-number="$VERSION_CODE"
 
-      - name: Create checksums
-        if: github.event_name != 'pull_request'
-        shell: bash
-        run: |
-          sha256sum \
-            build/app/outputs/flutter-apk/app-release.apk \
-            build/app/outputs/bundle/release/app-release.aab \
-            > build/android-checksums.sha256
+          mkdir -p release
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "release/orbit-breaker-v${VERSION_NAME}-release.apk"
 
-      - name: Upload Android artifacts
+      - name: Upload release APK
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v7
         with:
-          name: orbit-breaker-android-${{ github.run_number }}
-          path: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/bundle/release/app-release.aab
-            build/android-checksums.sha256
+          name: orbit-breaker-v${{ env.VERSION_NAME }}
+          path: release/orbit-breaker-v${{ env.VERSION_NAME }}-release.apk
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
