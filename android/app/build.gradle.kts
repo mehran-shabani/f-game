@@ -32,10 +32,22 @@ val releaseSigningValues =
     )
 val hasAnyReleaseSigningValue = releaseSigningValues.values.any { !it.isNullOrBlank() }
 val hasAllReleaseSigningValues = releaseSigningValues.values.all { !it.isNullOrBlank() }
+val releaseTaskRequested = gradle.startParameter.taskNames.any { taskName ->
+    val task = taskName.substringAfterLast(':')
+    task.equals("assembleRelease", ignoreCase = true) ||
+        task.equals("bundleRelease", ignoreCase = true) ||
+        task.equals("packageRelease", ignoreCase = true)
+}
 
 check(!hasAnyReleaseSigningValue || hasAllReleaseSigningValues) {
     val missingValues = releaseSigningValues.filterValues { it.isNullOrBlank() }.keys.joinToString()
     "Incomplete Android release signing configuration. Missing: $missingValues"
+}
+
+check(!releaseTaskRequested || hasAllReleaseSigningValues) {
+    "A signed Android release was requested, but no complete release keystore " +
+        "configuration was found. Configure android/key.properties or the four " +
+        "ANDROID_KEYSTORE_* environment variables; unsigned APKs must not be distributed."
 }
 
 android {

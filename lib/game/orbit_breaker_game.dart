@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -5,8 +6,8 @@ import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart' show Alignment, RadialGradient;
 import 'package:flutter/foundation.dart' show ValueNotifier;
-import 'package:flutter/services.dart';
 
+import 'game_feedback.dart';
 import 'game_palette.dart';
 import 'game_store.dart';
 import 'run_rules.dart';
@@ -35,11 +36,12 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
   final ValueNotifier<bool> newBest = ValueNotifier<bool>(false);
 
   final math.Random _random = math.Random();
+  final math.Random _spaceRandom = math.Random(1907);
   final List<_Hazard> _hazards = <_Hazard>[];
   final List<_Crystal> _crystals = <_Crystal>[];
   final List<_Particle> _particles = <_Particle>[];
   final List<_TrailPoint> _trail = <_TrailPoint>[];
-  final List<Offset> _stars = <Offset>[];
+  final List<_SpaceStar> _stars = <_SpaceStar>[];
 
   double _playerAngle = -math.pi / 2;
   double _direction = 1;
@@ -48,6 +50,9 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
   double _crystalClock = 0;
   double _tapCooldown = 0;
   double _pulse = 0;
+  double _spaceTravel = 0;
+  double _impactFlash = 0;
+  Color _impactColor = const Color(0x00FFFFFF);
   int _nearMisses = 0;
   bool _shieldActive = false;
   int lastReward = 0;
@@ -68,8 +73,21 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     super.onGameResize(size);
     if (_stars.isEmpty && size.x > 0 && size.y > 0) {
       final seeded = math.Random(731);
-      for (var index = 0; index < 72; index++) {
-        _stars.add(Offset(seeded.nextDouble(), seeded.nextDouble()));
+      for (var index = 0; index < 112; index++) {
+        final depth = 0.25 + seeded.nextDouble() * 0.75;
+        _stars.add(
+          _SpaceStar(
+            x: seeded.nextDouble(),
+            y: seeded.nextDouble(),
+            depth: depth,
+            phase: seeded.nextDouble() * math.pi * 2,
+            tint: index % 11 == 0
+                ? const Color(0xFF8BD8FF)
+                : index % 17 == 0
+                ? const Color(0xFFD4A8FF)
+                : const Color(0xFFFFFFFF),
+          ),
+        );
       }
     }
   }
@@ -101,7 +119,7 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
       ..remove(OverlayId.tutorial)
       ..add(OverlayId.hud);
     resumeEngine();
-    _feedback();
+    _feedback(FeedbackCue.start);
   }
 
   void requestStart() {
@@ -157,7 +175,7 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     _tapCooldown = 0.075;
     final player = _playerPosition;
     _burst(player, activeSkin.primary, count: 5, speed: 35);
-    _feedback();
+    _feedback(FeedbackCue.turn);
   }
 
   Offset get _playerPosition =>
@@ -172,12 +190,14 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     final step = dt.clamp(0.0, 0.05);
     super.update(step);
     _pulse += step;
+    _impactFlash = math.max(0, _impactFlash - step * 2.8);
+    _updateSpace(step);
     _updateParticles(step);
     if (runState.value != RunState.playing) return;
 
     _elapsed += step;
     _tapCooldown = math.max(0, _tapCooldown - step);
-    final angularSpeed = (1.78 + _elapsed * 0.004).clamp(1.78, 2.28);
+    final angularSpeed = (1.92 + _elapsed * 0.009).clamp(1.92, 2.78);
     _playerAngle =
         (_playerAngle + _direction * angularSpeed * step) % (math.pi * 2);
 
@@ -197,8 +217,8 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
 
     _crystalClock -= step;
     if (_crystalClock <= 0) {
-      if (_crystals.length < 2) _spawnCrystal();
-      _crystalClock = 2.4 + _random.nextDouble() * 1.6;
+      if (_crystals.isEmpty) _spawnCrystal();
+      _crystalClock = 3.0 + _random.nextDouble() * 1.6;
     }
 
     _updateHazards(step);
@@ -213,15 +233,32 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
   void _spawnHazard() {
     final radius = _orbitRadius + math.max(105, size.x * 0.3);
     final lead = _direction * (0.55 + _random.nextDouble() * 1.8);
+    _addHazard(angle: _playerAngle + lead, radius: radius);
+
+    if (_random.nextDouble() < hazardBurstChanceFor(_elapsed)) {
+      final separation = 0.52 + _random.nextDouble() * 0.42;
+      _addHazard(
+        angle: _playerAngle + lead - _direction * separation,
+        radius: radius + 34 + _random.nextDouble() * 28,
+        sizeScale: 0.88,
+      );
+    }
+  }
+
+  void _addHazard({
+    required double angle,
+    required double radius,
+    double sizeScale = 1,
+  }) {
     _hazards.add(
       _Hazard(
-        angle: _playerAngle + lead,
+        angle: angle,
         radius: radius,
         radialSpeed:
-            hazardSpeedFor(_elapsed) * (0.9 + _random.nextDouble() * 0.2),
+            hazardSpeedFor(_elapsed) * (0.92 + _random.nextDouble() * 0.2),
         rotation: _random.nextDouble() * math.pi,
-        rotationSpeed: (_random.nextDouble() - 0.5) * 3.4,
-        size: 12 + _random.nextDouble() * 5,
+        rotationSpeed: (_random.nextDouble() - 0.5) * 4.2,
+        size: (14 + _random.nextDouble() * 7) * sizeScale,
       ),
     );
   }
@@ -246,7 +283,8 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
           _shieldActive = false;
           shieldCharge.value = 0;
           _burst(position, activeSkin.primary, count: 28, speed: 150);
-          _feedback(heavy: true);
+          _flash(activeSkin.primary, strength: 0.48);
+          _feedback(FeedbackCue.shield);
         } else {
           _endRun();
           return;
@@ -255,10 +293,11 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
 
       if (!hazard.resolved && hazard.radius < _orbitRadius - 3) {
         hazard.resolved = true;
-        if (angularDistance(hazard.angle, _playerAngle) < 0.52) {
+        if (angularDistance(hazard.angle, _playerAngle) < 0.44) {
           _nearMisses++;
           _burst(position, dangerColor, count: 8, speed: 65);
-          _feedback();
+          _flash(dangerColor, strength: 0.14);
+          _feedback(FeedbackCue.nearMiss);
         }
       }
     }
@@ -275,13 +314,14 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
         crystal.collected = true;
         runCrystals.value++;
         var charge = shieldCharge.value + 1;
-        if (charge >= 5) {
-          charge = 5;
+        if (charge >= 6) {
+          charge = 6;
           _shieldActive = true;
         }
         shieldCharge.value = charge;
         _burst(position, crystalColor, count: 16, speed: 95);
-        _feedback();
+        _flash(crystalColor, strength: 0.1);
+        _feedback(FeedbackCue.crystal);
       }
     }
     _crystals.removeWhere((crystal) => crystal.collected || crystal.life <= 0);
@@ -293,7 +333,8 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     newBest.value = score.value > store.profile.value.bestScore;
     lastReward = math.max(1, runCrystals.value + score.value ~/ 75);
     _burst(_playerPosition, dangerColor, count: 42, speed: 190);
-    _feedback(heavy: true);
+    _flash(dangerColor, strength: 0.72);
+    _feedback(FeedbackCue.gameOver);
     overlays
       ..remove(OverlayId.hud)
       ..add(OverlayId.gameOver);
@@ -334,18 +375,32 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     _particles.removeWhere((particle) => particle.life <= 0);
   }
 
-  void _feedback({bool heavy = false}) {
-    final profile = store.profile.value;
-    if (profile.hapticsEnabled) {
-      if (heavy) {
-        HapticFeedback.heavyImpact();
-      } else {
-        HapticFeedback.selectionClick();
+  void _updateSpace(double dt) {
+    final travelSpeed = runState.value == RunState.playing ? 0.033 : 0.012;
+    _spaceTravel = (_spaceTravel + dt * travelSpeed) % 1;
+    for (final star in _stars) {
+      star.y += dt * travelSpeed * (0.32 + star.depth * 1.15);
+      if (star.y > 1.03) {
+        star.y -= 1.08;
+        star.x = (_spaceRandom.nextDouble() * 0.9) + 0.05;
       }
     }
-    if (profile.soundEnabled) {
-      SystemSound.play(SystemSoundType.click);
-    }
+  }
+
+  void _flash(Color color, {required double strength}) {
+    _impactColor = color;
+    _impactFlash = math.max(_impactFlash, strength);
+  }
+
+  void _feedback(FeedbackCue cue) {
+    final profile = store.profile.value;
+    unawaited(
+      GameFeedback.play(
+        cue: cue,
+        sound: profile.soundEnabled,
+        haptics: profile.hapticsEnabled,
+      ),
+    );
   }
 
   @override
@@ -358,6 +413,7 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     _renderHazards(canvas);
     _renderPlayer(canvas);
     _renderParticles(canvas);
+    _renderImpactFlash(canvas);
   }
 
   void _renderBackground(Canvas canvas) {
@@ -366,23 +422,64 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
       bounds,
       Paint()
         ..shader = const RadialGradient(
-          center: Alignment(0, -0.15),
+          center: Alignment(0, -0.3),
           radius: 1.05,
-          colors: <Color>[Color(0xFF101B3E), gameBackground],
+          colors: <Color>[Color(0xFF172651), Color(0xFF080B22), gameBackground],
+          stops: <double>[0, 0.54, 1],
         ).createShader(bounds),
     );
-    final starPaint = Paint()..color = const Color(0xFFFFFFFF);
+
+    final nebulaShift = math.sin(_spaceTravel * math.pi * 2);
+    _drawNebula(
+      canvas,
+      center: Offset(size.x * (0.12 + nebulaShift * 0.035), size.y * 0.24),
+      radius: size.x * 0.56,
+      color: const Color(0xFF314DFF),
+      alpha: 0.075,
+    );
+    _drawNebula(
+      canvas,
+      center: Offset(size.x * (0.94 - nebulaShift * 0.025), size.y * 0.7),
+      radius: size.x * 0.5,
+      color: const Color(0xFFA12BFF),
+      alpha: 0.055,
+    );
+
+    final starPaint = Paint()
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
     for (var index = 0; index < _stars.length; index++) {
       final star = _stars[index];
       final shimmer =
-          0.18 + 0.32 * (0.5 + 0.5 * math.sin(_pulse * 1.5 + index));
-      starPaint.color = const Color(0xFFFFFFFF).withValues(alpha: shimmer);
-      canvas.drawCircle(
-        Offset(star.dx * size.x, star.dy * size.y),
-        index % 7 == 0 ? 1.3 : 0.7,
+          0.2 + 0.48 * (0.5 + 0.5 * math.sin(_pulse * 1.35 + star.phase));
+      final position = Offset(star.x * size.x, star.y * size.y);
+      final trail =
+          (runState.value == RunState.playing ? 3.2 : 1.3) * star.depth;
+      starPaint
+        ..strokeWidth = 0.55 + star.depth * 1.35
+        ..color = star.tint.withValues(alpha: shimmer * star.depth);
+      canvas.drawLine(
+        position - Offset(0, trail),
+        position + Offset(0, trail * 0.35),
         starPaint,
       );
     }
+  }
+
+  void _drawNebula(
+    Canvas canvas, {
+    required Offset center,
+    required double radius,
+    required Color color,
+    required double alpha,
+  }) {
+    canvas.drawCircle(
+      center,
+      radius,
+      Paint()
+        ..color = color.withValues(alpha: alpha)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, radius * 0.42),
+    );
   }
 
   void _renderArena(Canvas canvas) {
@@ -417,6 +514,29 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     for (var segment = 0; segment < 36; segment++) {
       final start = segment * math.pi * 2 / 36 + _pulse * 0.04;
       canvas.drawArc(track, start, 0.105, false, trackPaint);
+    }
+
+    final outerTrack = Rect.fromCircle(
+      center: center,
+      radius: _orbitRadius + 17,
+    );
+    final outerPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = activeSkin.glow.withValues(alpha: 0.1);
+    for (var segment = 0; segment < 12; segment++) {
+      final start = segment * math.pi * 2 / 12 - _pulse * 0.09;
+      canvas.drawArc(outerTrack, start, 0.22, false, outerPaint);
+    }
+
+    for (var node = 0; node < 4; node++) {
+      final angle = _pulse * 0.16 + node * math.pi / 2;
+      final position = _pointAt(angle, _orbitRadius + 17);
+      canvas.drawCircle(
+        position,
+        1.8,
+        Paint()..color = activeSkin.primary.withValues(alpha: 0.5),
+      );
     }
   }
 
@@ -470,6 +590,15 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
     for (final hazard in _hazards) {
       final position = _pointAt(hazard.angle, hazard.radius);
       final dangerAlpha = hazard.resolved ? 0.28 : 0.95;
+      final inward = Offset(math.cos(hazard.angle), math.sin(hazard.angle));
+      canvas.drawLine(
+        position + inward * (hazard.size * 1.4),
+        position + inward * (hazard.size * 3.2),
+        Paint()
+          ..strokeWidth = 2.2
+          ..strokeCap = StrokeCap.round
+          ..color = dangerColor.withValues(alpha: 0.14 * dangerAlpha),
+      );
       canvas.save();
       canvas.translate(position.dx, position.dy);
       canvas.rotate(hazard.rotation);
@@ -497,6 +626,11 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2
           ..color = dangerColor.withValues(alpha: dangerAlpha),
+      );
+      canvas.drawCircle(
+        Offset.zero,
+        hazard.size * 0.24,
+        Paint()..color = const Color(0xFFFFD3DB).withValues(alpha: dangerAlpha),
       );
       canvas.restore();
     }
@@ -537,6 +671,14 @@ class OrbitBreakerGame extends FlameGame with TapCallbacks {
           ),
       );
     }
+  }
+
+  void _renderImpactFlash(Canvas canvas) {
+    if (_impactFlash <= 0) return;
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.x, size.y),
+      Paint()..color = _impactColor.withValues(alpha: _impactFlash * 0.16),
+    );
   }
 }
 
@@ -591,4 +733,20 @@ class _Particle {
   double life;
   final double maxLife;
   final double radius;
+}
+
+class _SpaceStar {
+  _SpaceStar({
+    required this.x,
+    required this.y,
+    required this.depth,
+    required this.phase,
+    required this.tint,
+  });
+
+  double x;
+  double y;
+  final double depth;
+  final double phase;
+  final Color tint;
 }

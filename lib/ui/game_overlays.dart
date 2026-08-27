@@ -168,8 +168,8 @@ class TutorialOverlay extends StatelessWidget {
             const _TutorialStep(
               icon: Icons.diamond_rounded,
               color: crystalColor,
-              title: 'COLLECT 5 = SHIELD',
-              detail: 'Green crystals charge a shield that blocks one hit.',
+              title: 'COLLECT 6 = SHIELD',
+              detail: 'Six green crystals charge a shield that blocks one hit.',
             ),
             const SizedBox(height: 26),
             NeonButton(
@@ -297,7 +297,7 @@ class HudOverlay extends StatelessWidget {
                               ValueListenableBuilder<int>(
                                 valueListenable: game.shieldCharge,
                                 builder: (_, charge, _) => Row(
-                                  children: List.generate(5, (index) {
+                                  children: List.generate(6, (index) {
                                     final active = index < charge;
                                     return AnimatedContainer(
                                       duration: const Duration(

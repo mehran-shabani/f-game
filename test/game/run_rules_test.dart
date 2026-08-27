@@ -19,9 +19,12 @@ void main() {
   });
 
   test('difficulty values remain within safe bounds', () {
-    expect(spawnIntervalFor(0), 1.35);
-    expect(spawnIntervalFor(10000), 0.48);
-    expect(hazardSpeedFor(0), 72);
-    expect(hazardSpeedFor(10000), 132);
+    expect(spawnIntervalFor(0), 1.12);
+    expect(spawnIntervalFor(10000), 0.34);
+    expect(hazardSpeedFor(0), 88);
+    expect(hazardSpeedFor(10000), 176);
+    expect(hazardBurstChanceFor(10), 0);
+    expect(hazardBurstChanceFor(14), 0.16);
+    expect(hazardBurstChanceFor(10000), 0.46);
   });
 }

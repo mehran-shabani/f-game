@@ -14,9 +14,14 @@ int calculateScore({
 }
 
 double spawnIntervalFor(double elapsedSeconds) {
-  return (1.35 - elapsedSeconds * 0.006).clamp(0.48, 1.35);
+  return (1.12 - elapsedSeconds * 0.008).clamp(0.34, 1.12);
 }
 
 double hazardSpeedFor(double elapsedSeconds) {
-  return (72 + elapsedSeconds * 0.7).clamp(72, 132);
+  return (88 + elapsedSeconds * 1.05).clamp(88, 176);
+}
+
+double hazardBurstChanceFor(double elapsedSeconds) {
+  if (elapsedSeconds < 14) return 0;
+  return (0.16 + (elapsedSeconds - 14) * 0.006).clamp(0.16, 0.46);
 }
